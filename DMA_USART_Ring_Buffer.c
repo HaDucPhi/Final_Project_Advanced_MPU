@@ -29,7 +29,7 @@ char msg[BUFFER_SIZE];
 char msgo[BUFFER_SIZE];
 int i;
 char CtrlZ[] = {0x1A, 0x00};
-bool Stanby,Ready,Send_Done;
+bool Standby,Ready,Send_Done;
 char Cmd;
 //-------------------------------------------Khai bao ham--------------------------------------------------------
 void A7670C_Start(void);
@@ -311,4 +311,5 @@ void A7670C_Message(void)
             break;
     }
 }
+
 
