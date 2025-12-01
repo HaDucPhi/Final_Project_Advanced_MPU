@@ -180,19 +180,24 @@ int main(void) {
 	USART1_Init();
 	DMA1_Channel4_USART1_Config();
 	DMA1_Channel5_USART1_Config();
-	A7670C_Send_Msg();
-
+	SIM_Init();
     // -------- Main loop ----------
     while(1) {
+		if(Ready){
+			if(!Send_Done){
+			Send_Mesage();}
+		}
 		Handle_Message();
 		A7670C_Message();
 }
 void SIM_Init(void){
+	Stanby = false;
 	Cmd = 'A';
 	Start_SIM = true;
 	Send_message = false;}
 void Send_Message(void){
-	Cmd = 'A';
+	Stanby = false;
+	Cmd = 'D';
 	Start_SIM = false;
 	Send_message = true;}
 //-------------------------------------------------Ham xu ly nhan du lieu ----------------------------------------------------------
@@ -306,3 +311,4 @@ void A7670C_Message(void)
             break;
     }
 }
+
