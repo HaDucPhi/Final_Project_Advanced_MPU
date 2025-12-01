@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "Systime.h"
 #define BUFFER_SIZE 256
-#define TX_BUFFER_SIZE 30
+#define TX_BUFFER_SIZE 256
 #define RX_BUFFER_SIZE 30
 // -------- TX ----------
 volatile char TX_Buffer[TX_BUFFER_SIZE];
@@ -28,9 +28,16 @@ int k = 0;
 char msg[BUFFER_SIZE];
 char msgo[BUFFER_SIZE];
 int i;
+char CtrlZ[] = {0x1A, 0x00};
+bool Stanby,Ready,Send_Done;
+char Cmd;
+//-------------------------------------------Khai bao ham--------------------------------------------------------
 void A7670C_Start(void);
 void A7670C_Send_Msg(void);
-char CtrlZ[] = {0x1A, 0x00};
+void A7670C_Message(void);
+void Handle_Message(void);
+void SIM_Init(void);
+void Send_Message(void);
 //-------------------------------------------Xu ly truyen nhan bang FIFO-----------------------------------------
 void USART1_Init(void){
     RCC->APB2ENR |= (1 << 14);// Clock from ABP2 to USART1
@@ -97,7 +104,7 @@ void USART1_IRQHandler(void) {
 					}
 						strcat(S_sum, S);
 						memcpy(msg, S_sum, sizeof(S_sum));
-				    memset(S, 0, sizeof(S));
+				    	memset(S, 0, sizeof(S));
 						memset(S_sum, 0, sizeof(S_sum));
 				}
 				else if( RX_Head < RX_Tail){
@@ -161,7 +168,7 @@ void DMA1_Channel5_IRQHandler(void)
 }
 // -------- Main ----------
 int main(void) {
-    // -------- Cau hình RCC và GPIO ----------
+    // -------- Cau hÃ¬nh RCC vÃ  GPIO ----------
     RCC->APB2ENR |= (1 << 2);   // GPIOA
     // PA9 TX - Alternate function push-pull
     GPIOA->CRH &= ~(0xF << ((9-8)*4));
@@ -170,34 +177,132 @@ int main(void) {
     GPIOA->CRH &= ~(0xF << ((10-8)*4));
     GPIOA->CRH |=  (0x4 << ((10-8)*4));
     SysTick_Init();
-	  USART1_Init();
-	  DMA1_Channel4_USART1_Config();
-	  DMA1_Channel5_USART1_Config();
-		A7670C_Send_Msg();
+	USART1_Init();
+	DMA1_Channel4_USART1_Config();
+	DMA1_Channel5_USART1_Config();
+	A7670C_Send_Msg();
+
     // -------- Main loop ----------
     while(1) {
-			if(RX_Available){
-				  memcpy(msgo, msg, sizeof(msg));
-			    USART1_DMA_Send(msgo);
-					memset(msg, 0, sizeof(msg));
-					RX_Available = false;
-			}
+		Handle_Message();
+		A7670C_Message();
+}
+void SIM_Init(void){
+	Cmd = 'A';
+	Start_SIM = true;
+	Send_message = false;}
+void Send_Message(void){
+	Cmd = 'A';
+	Start_SIM = false;
+	Send_message = true;}
+//-------------------------------------------------Ham xu ly nhan du lieu ----------------------------------------------------------
+void Handle_Message(void){
+    if(RX_Available){
+        memcpy(msgo, msg, sizeof(msg));
+		memset(msg, 0, sizeof(msg));
+        RX_Available = false;
+		// Neu  Start SIM = 1 thi kiem tra thong diep luc cau hinh.
+        if(Start_SIM){
+            switch(Cmd){
+                case 'A':
+                    // Nhay sang State B neu thong diep nhan co OK.
+                    if (strstr(msgo, "OK") != NULL) {
+                        Cmd = 'B';
+                        Standby = 0;
+                    }
+                    break;
+                case 'B':
+                    // Nhay sang State C neu thong diep nhan co "+CPIN: READY"
+                    if (strstr(msgo, "+CPIN: READY") != NULL) {
+                        Cmd = 'C';
+                        Standby = 0;
+                    }
+                    break;
+                case 'C':
+                    // Nhay sang State G ket thuc neu nhan OK.			
+                    if (strstr(msgo, "OK") != NULL) {
+                        Cmd = 'G';
+                        Standby = 0;
+                    }
+                    break;
+                default:
+                    break;
+            }
+		// Neu  Send message = 1 thi kiem tra thong diep luc dang gui tin nhan
+		if (Send_message) {
+		    switch (Cmd) {
+		        case 'D':
+		            if (strstr(msgo, ">") != NULL) {
+		                Cmd = 'E';
+		                Standby = 0;
+		            }
+		            break;
+		
+		        case 'E':
+		            if (strstr(msgo, "OK") != NULL) {
+		                Cmd = 'F';
+		                Standby = 1;
+		            }
+		            break;
+		
+		        default:
+		            break;
+		    }
 		}
+        }
+    }
 }
-void A7670C_Start(void){
-	    Delay_ms(20);
-	    USART1_DMA_Send("AT\r\n");
-      Delay_ms(2000);
-      USART1_DMA_Send("AT+CPIN?\r\n");
-      Delay_ms(2000);
-      USART1_DMA_Send("AT+CMGF=1\r\n");
-			Delay_ms(2000);
-}
-void A7670C_Send_Msg(void){
-    USART1_DMA_Send("AT+CMGS=\"0763550227\"\r\n");
-    Delay_ms(500);
-		USART1_DMA_Send("Chao thay va cac ban <3 \r\n");
-		Delay_ms(500);
-    USART1_DMA_Send(CtrlZ); // Ctrl+Z
-    Delay_ms(500);
+
+//---------------------------------------Ham chua cac tin nhan co the gui di -------------------------------------------------------
+void A7670C_Message(void)
+{
+    switch (Cmd) {
+        case 'A':
+            if (!Standby) {
+                USART1_DMA_Send("AT\r\n");
+                Standby = 1;
+            }
+            break;
+        case 'B':
+            if (!Standby) {
+                USART1_DMA_Send("AT+CPIN?\r\n");
+                Standby = 1;
+            }
+            break;
+        case 'C':
+            if (!Standby) {
+                USART1_DMA_Send("AT+CMGF=1\r\n");
+                Standby = 1;
+            }
+            break;
+        case 'D':
+            if (!Standby) {
+                USART1_DMA_Send("AT+CMGS=\"0765378801\"\r\n");
+                Standby = 1;
+            }
+            break;
+        case 'E':
+            if (!Standby) {
+                USART1_DMA_Send("Chao thay va cac ban <3 \r\n");
+                Delay_ms(10);
+                USART1_DMA_Send(CtrlZ);  // Ctrl+Z
+                Standby = 1;
+            }
+            break;
+        case 'F':
+            if (!Standby) {
+                Send_Done = 1;
+                Standby = 1;
+            }
+            break;
+        case 'G':
+            if (!Standby) {
+                Ready = 1;
+                Standby = 1;
+            }
+            break;
+
+        default:
+            break;
+    }
 }
