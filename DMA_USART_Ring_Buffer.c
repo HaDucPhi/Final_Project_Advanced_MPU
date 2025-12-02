@@ -28,16 +28,17 @@ int k = 0;
 char msg[BUFFER_SIZE];
 char msgo[BUFFER_SIZE];
 int i;
-char CtrlZ[] = {0x1A, 0x00};
-bool Standby,Ready,Send_Done;
-char Cmd;
-//-------------------------------------------Khai bao ham--------------------------------------------------------
-void A7670C_Start(void);
-void A7670C_Send_Msg(void);
-void A7670C_Message(void);
 void Handle_Message(void);
+void A7670C_Message(void);
 void SIM_Init(void);
-void Send_Message(void);
+void Send_msg(void);
+char CtrlZ[] = {0x1A, 0x00};
+char Cmd;
+bool Standby;
+bool Start_SIM;
+bool Send_message;
+bool Ready;
+bool Send_Done;
 //-------------------------------------------Xu ly truyen nhan bang FIFO-----------------------------------------
 void USART1_Init(void){
     RCC->APB2ENR |= (1 << 14);// Clock from ABP2 to USART1
@@ -53,7 +54,6 @@ void DMA1_Channel4_USART1_Config(void){
 		DMA1_Channel4->CCR  = 0; // Xoa cau hinh cu
 		DMA1_Channel4->CPAR = (uint32_t)&USART1->DR; // Dia chi ngoai vi den thanh ghi du lieu USART
 		DMA1_Channel4->CCR |= (1 << 12)|(1 << 7)| ( 0 << 6) | ( 1 << 4); // Priority = Medium, MSIZE = PSIZE = 8, MINC = 1, PINC = 0M, DIR = 1 
-		DMA1_Channel4->CCR |= (1 << 1)|(1 << 2); // Cho phep ngat Half transfer va Transfer complete
 		DMA1_Channel4->CCR |= (1 << 1); // Enable Transfer Complete Interrupt
 	  NVIC_EnableIRQ(DMA1_Channel4_IRQn); // Enable NVIC cho DMA1 Channel4
 	}
@@ -104,7 +104,7 @@ void USART1_IRQHandler(void) {
 					}
 						strcat(S_sum, S);
 						memcpy(msg, S_sum, sizeof(S_sum));
-				    	memset(S, 0, sizeof(S));
+				    memset(S, 0, sizeof(S));
 						memset(S_sum, 0, sizeof(S_sum));
 				}
 				else if( RX_Head < RX_Tail){
@@ -128,8 +128,8 @@ void USART1_IRQHandler(void) {
 void DMA1_Channel5_IRQHandler(void)
 {
     // Half-transfer interrupt
-    if (DMA1->ISR & (1 << 16)) {
-        DMA1->IFCR |= (1 << 16);// Clear flag
+    if (DMA1->ISR & (1 << 18)) {
+        DMA1->IFCR |= (1 << 18);// Clear flag
 				RX_Head = RX_BUFFER_SIZE - DMA1_Channel5->CNDTR;
 				c++;
 				if(RX_Head > RX_Tail ){		
@@ -153,8 +153,9 @@ void DMA1_Channel5_IRQHandler(void)
     }
     // Transfer complete interrupt
     if (DMA1->ISR & (1 << 17)) {
+				c++;
         DMA1->IFCR |= (1 << 17);// Clear flag
-				RX_Head = 30;			
+				RX_Head = RX_BUFFER_SIZE;			
 				if(RX_Head > RX_Tail ){		
 						RX_num = RX_Head - RX_Tail;
 					for( i=0; i<RX_num; i++) {
@@ -177,139 +178,122 @@ int main(void) {
     GPIOA->CRH &= ~(0xF << ((10-8)*4));
     GPIOA->CRH |=  (0x4 << ((10-8)*4));
     SysTick_Init();
-	USART1_Init();
-	DMA1_Channel4_USART1_Config();
-	DMA1_Channel5_USART1_Config();
-	SIM_Init();
+	  USART1_Init();
+	  DMA1_Channel4_USART1_Config();
+	  DMA1_Channel5_USART1_Config();
     // -------- Main loop ----------
+		SIM_Init();
     while(1) {
-		if(Ready){
-			if(!Send_Done){
-			Send_Mesage();}
+			if( Ready){
+				if(!Send_Done){
+					Send_msg();
+					}}
+			Handle_Message();
+			A7670C_Message();
 		}
-		Handle_Message();
-		A7670C_Message();
 }
 void SIM_Init(void){
-	Stanby = false;
-	Cmd = 'A';
-	Start_SIM = true;
-	Send_message = false;}
-void Send_Message(void){
-	Stanby = false;
-	Cmd = 'D';
-	Start_SIM = false;
-	Send_message = true;}
-//-------------------------------------------------Ham xu ly nhan du lieu ----------------------------------------------------------
+		Standby = 0;
+		Cmd = 'A';
+		Start_SIM = 1;
+		Send_message = 0;
+	}
+void Send_msg(void){
+	  Standby = 0;
+		Cmd = 'D';
+		Start_SIM = 0;
+		Send_message = 1;
+	}
 void Handle_Message(void){
-    if(RX_Available){
-        memcpy(msgo, msg, sizeof(msg));
-		memset(msg, 0, sizeof(msg));
-        RX_Available = false;
-		// Neu  Start SIM = 1 thi kiem tra thong diep luc cau hinh.
-        if(Start_SIM){
-            switch(Cmd){
-                case 'A':
-                    // Nhay sang State B neu thong diep nhan co OK.
-                    if (strstr(msgo, "OK") != NULL) {
-                        Cmd = 'B';
-                        Standby = 0;
-                    }
-                    break;
-                case 'B':
-                    // Nhay sang State C neu thong diep nhan co "+CPIN: READY"
-                    if (strstr(msgo, "+CPIN: READY") != NULL) {
-                        Cmd = 'C';
-                        Standby = 0;
-                    }
-                    break;
-                case 'C':
-                    // Nhay sang State G ket thuc neu nhan OK.			
-                    if (strstr(msgo, "OK") != NULL) {
-                        Cmd = 'G';
-                        Standby = 0;
-                    }
-                    break;
-                default:
-                    break;
-            }
-		// Neu  Send message = 1 thi kiem tra thong diep luc dang gui tin nhan
-		if (Send_message) {
-		    switch (Cmd) {
-		        case 'D':
-		            if (strstr(msgo, ">") != NULL) {
-		                Cmd = 'E';
-		                Standby = 0;
-		            }
-		            break;
-		
-		        case 'E':
-		            if (strstr(msgo, "OK") != NULL) {
-		                Cmd = 'F';
-		                Standby = 1;
-		            }
-		            break;
-		
-		        default:
-		            break;
-		    }
-		}
-        }
-    }
+			if(RX_Available){
+				  memcpy(msgo, msg, sizeof(msg));
+				if(Start_SIM){
+					switch(Cmd){
+						case 'A':
+							if(strstr(msgo, "OK") != NULL){
+							Cmd = 'B';
+							Standby = 0;
+							}
+							break;
+						case 'B':
+							if(strstr(msgo, "+CPIN: READY") != NULL){
+							Cmd = 'C';
+							Standby = 0;
+							}
+							break;  
+						case 'C':    
+							if(strstr(msgo, "OK") != NULL){
+							Cmd = 'G';
+							Standby = 0;
+							}
+							break; 						
+					}						
+				}
+				if(Send_message){
+					switch(Cmd){
+						case 'D':
+							if(strstr(msgo, ">") != NULL){
+							Cmd = 'E';
+							Standby = 0;
+							}
+							break;
+						case 'E':
+							if(strstr(msgo, "OK") != NULL){
+							Cmd = 'F';
+							Standby = 1;
+							}
+							break;  						
+					}						
+				}
+					memset(msg, 0, sizeof(msg));
+					RX_Available = false;
+			}	
 }
-
-//---------------------------------------Ham chua cac tin nhan co the gui di -------------------------------------------------------
-void A7670C_Message(void)
-{
-    switch (Cmd) {
-        case 'A':
-            if (!Standby) {
-                USART1_DMA_Send("AT\r\n");
-                Standby = 1;
-            }
-            break;
-        case 'B':
-            if (!Standby) {
-                USART1_DMA_Send("AT+CPIN?\r\n");
-                Standby = 1;
-            }
-            break;
-        case 'C':
-            if (!Standby) {
-                USART1_DMA_Send("AT+CMGF=1\r\n");
-                Standby = 1;
-            }
-            break;
-        case 'D':
-            if (!Standby) {
-                USART1_DMA_Send("AT+CMGS=\"0765378801\"\r\n");
-                Standby = 1;
-            }
-            break;
-        case 'E':
-            if (!Standby) {
-                USART1_DMA_Send("Chao thay va cac ban <3 \r\n");
-                Delay_ms(10);
-                USART1_DMA_Send(CtrlZ);  // Ctrl+Z
-                Standby = 1;
-            }
-            break;
-        case 'F':
-            if (!Standby) {
-                Send_Done = 1;
-                Standby = 1;
-            }
-            break;
-        case 'G':
-            if (!Standby) {
-                Ready = 1;
-                Standby = 1;
-            }
-            break;
-
-        default:
-            break;
-    }
+void A7670C_Message(void){
+	switch(Cmd){
+		case 'A':
+			if(!Standby){
+	    USART1_DMA_Send("AT\r\n");
+			Standby = 1;
+			}
+      break;
+		case 'B':
+			if(!Standby){
+      USART1_DMA_Send("AT+CPIN?\r\n");
+			Standby = 1;
+			}
+      break;  
+		case 'C':    
+			if(!Standby){
+      USART1_DMA_Send("AT+CMGF=1\r\n");
+			Standby = 1;
+			}
+		  break; 
+		case 'D':	
+			if(!Standby){
+			USART1_DMA_Send("AT+CMGS=\"0765378801\"\r\n");
+			Standby = 1;
+			}
+		  break; 
+		case 'E':	
+			if(!Standby){
+		  USART1_DMA_Send("Chao thay va cac ban <3 \r\n");
+			Delay_ms(10);
+	    USART1_DMA_Send(CtrlZ); // Ctrl+Z				
+			Standby = 1;
+			}
+		  break;
+		case 'F':	
+			if(!Standby){
+			Send_Done = 1;
+			Standby = 1;
+			}
+			break;
+		case 'G':	// Nothing;
+			if(!Standby){
+			Ready = 1;
+			Standby = 1;
+			}
+			break;
+	}
 }
-
-
